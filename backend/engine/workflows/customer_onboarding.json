@@ -1,0 +1,34 @@
+{
+  "id": "customer_onboarding",
+  "name": "New customer onboarding",
+  "description": "When a customer pays, look up the payment in Stripe, create a CRM contact, and announce it in Slack.",
+  "version": 1,
+  "steps": [
+    {
+      "id": "fetch_payment",
+      "service": "stripe",
+      "method": "GET",
+      "path": "/stripe/payments/{{trigger.payment_id}}"
+    },
+    {
+      "id": "create_contact",
+      "service": "crm",
+      "method": "POST",
+      "path": "/crm/contacts",
+      "body": {
+        "name": "{{steps.fetch_payment.customer.name}}",
+        "email": "{{steps.fetch_payment.customer.email}}"
+      }
+    },
+    {
+      "id": "notify_slack",
+      "service": "slack",
+      "method": "POST",
+      "path": "/slack/messages",
+      "body": {
+        "channel": "#sales",
+        "text": "New customer {{steps.fetch_payment.customer.name}} paid {{steps.fetch_payment.amount}} {{steps.fetch_payment.currency}}"
+      }
+    }
+  ]
+}
