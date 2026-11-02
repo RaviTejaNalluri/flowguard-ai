@@ -24,6 +24,11 @@ contacts: list[dict] = []
 messages: list[dict] = []
 
 
+def _is_sandbox(request: Request) -> bool:
+    """Sandbox requests are validated normally but nothing is saved."""
+    return request.headers.get("x-flowguard-sandbox") == "1"
+
+
 def reset_data() -> None:
     contacts.clear()
     messages.clear()
@@ -52,6 +57,8 @@ async def create_contact(request: Request):
         if not body.get(field):
             raise HTTPException(422, f"Missing required field: '{field}'")
 
+    if _is_sandbox(request):
+        return {"id": "ct_sandbox", "name": body["name"], "email": body[email_field]}
     contact = {"id": f"ct_{len(contacts) + 1:03d}", "name": body["name"], "email": body[email_field]}
     contacts.append(contact)
     return contact
@@ -71,6 +78,8 @@ async def post_message(request: Request):
         if not body.get(field):
             raise HTTPException(422, f"Missing required field: '{field}'")
 
+    if _is_sandbox(request):
+        return {"ok": True, "ts": "sandbox", "channel": body["channel"], "text": body["text"]}
     message = {"ok": True, "ts": f"{len(messages) + 1}.000", "channel": body["channel"], "text": body["text"]}
     messages.append(message)
     return message

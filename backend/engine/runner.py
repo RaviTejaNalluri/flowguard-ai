@@ -30,9 +30,14 @@ def load_workflow(workflow_id: str) -> dict:
     return json.loads((WORKFLOWS_DIR / f"{workflow_id}.json").read_text())
 
 
-def mock_client() -> httpx.AsyncClient:
-    """An HTTP client wired straight to the fake services (no network needed)."""
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=mock_app), base_url="http://mocks")
+def mock_client(sandbox: bool = False) -> httpx.AsyncClient:
+    """An HTTP client wired straight to the fake services (no network needed).
+
+    In sandbox mode the services validate requests exactly as usual but don't
+    save anything, so testing a fix never creates real contacts or messages.
+    """
+    headers = {"X-FlowGuard-Sandbox": "1"} if sandbox else {}
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=mock_app), base_url="http://mocks", headers=headers)
 
 
 def _lookup(context: dict, path: str):

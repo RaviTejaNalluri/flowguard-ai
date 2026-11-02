@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 import db
 from agent.diagnose import diagnose
+from agent.repair import repair
 from engine.runner import mock_client, run_workflow
 from mocks import chaos
 from mocks.services import contacts, messages, reset_data
@@ -117,7 +118,64 @@ def get_incident(incident_id: int):
     incident = db.get_incident(incident_id)
     if not incident:
         raise HTTPException(404, f"No such incident: {incident_id}")
-    return {**incident, "run": db.get_run(incident["run_id"])}
+    resolution = db.get_run(incident["resolution_run_id"]) if incident["resolution_run_id"] else None
+    return {**incident, "run": db.get_run(incident["run_id"]), "resolution_run": resolution}
+
+
+def _require_status(incident: dict, *allowed: str) -> None:
+    if incident["status"] not in allowed:
+        raise HTTPException(409, f"Incident is '{incident['status']}', expected one of: {', '.join(allowed)}")
+
+
+@app.post("/incidents/{incident_id}/repair")
+def repair_incident(incident_id: int):
+    """Muse Spark proposes patches; each is tested in the sandbox until one passes (max 3 tries)."""
+    incident = get_incident(incident_id)
+    _require_status(incident, "diagnosed", "repair_failed")
+    run = incident["run"]
+    workflow = db.get_workflow_version(run["workflow_id"], run["workflow_version"])
+
+    result = repair(workflow, run, incident["diagnosis"])
+    db.update_incident(incident_id, status=result["status"], repair=result)
+    return get_incident(incident_id)
+
+
+@app.post("/runs/{run_id}/heal")
+def heal_run(run_id: int):
+    """Diagnose + repair in one call. Stops at 'needs_human' or 'awaiting_approval'."""
+    incident = diagnose_run(run_id)
+    if incident["status"] == "diagnosed":
+        return repair_incident(incident["id"])
+    return get_incident(incident["id"])
+
+
+@app.post("/incidents/{incident_id}/approve")
+async def approve_incident(incident_id: int):
+    """A human approved the fix: save it as a new workflow version, then re-run the failed trigger for real."""
+    incident = get_incident(incident_id)
+    _require_status(incident, "awaiting_approval")
+    run = incident["run"]
+    current = db.get_workflow(run["workflow_id"])
+    if current["version"] != run["workflow_version"]:
+        raise HTTPException(409, "The workflow changed since this fix was tested; heal a new failed run instead")
+
+    changes = "; ".join(incident["repair"]["changes"])
+    saved = db.save_workflow(incident["repair"]["patched_workflow"], note=f"FlowGuard fix (incident #{incident_id}): {changes}")
+    async with mock_client() as client:
+        result = await run_workflow(saved, run["trigger"], client)
+    replay = db.save_run(result)
+
+    db.update_incident(incident_id, status="resolved" if replay["status"] == "success" else "approved_but_failing",
+                       resolution_run_id=replay["id"])
+    return get_incident(incident_id)
+
+
+@app.post("/incidents/{incident_id}/reject")
+def reject_incident(incident_id: int):
+    incident = get_incident(incident_id)
+    _require_status(incident, "awaiting_approval")
+    db.update_incident(incident_id, status="rejected")
+    return get_incident(incident_id)
 
 
 # ---------- Chaos switches ----------

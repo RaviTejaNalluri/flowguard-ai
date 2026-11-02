@@ -4,7 +4,7 @@ Stores:
   workflows          the current version of each workflow recipe
   workflow_versions  every past version, so we can show "v1 -> v2 after the fix"
   runs               every workflow run with its full step-by-step record
-  incidents          a failed run plus FlowGuard's diagnosis (and later its repair)
+  incidents          a failed run plus FlowGuard's diagnosis, repair attempts and outcome
 """
 
 import json
@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     workflow_id TEXT NOT NULL,
     status      TEXT NOT NULL,
     diagnosis   TEXT,
+    repair      TEXT,
+    resolution_run_id INTEGER,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -70,6 +72,11 @@ def init_db() -> None:
     """Create tables and load the starter workflows from engine/workflows/ (first time only)."""
     with _connect() as conn:
         conn.executescript(SCHEMA)
+        # Databases created before repairs existed are missing these columns.
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(incidents)")}
+        for column, kind in (("repair", "TEXT"), ("resolution_run_id", "INTEGER")):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE incidents ADD COLUMN {column} {kind}")
         for path in sorted(WORKFLOWS_DIR.glob("*.json")):
             definition = json.loads(path.read_text())
             exists = conn.execute("SELECT 1 FROM workflows WHERE id = ?", (definition["id"],)).fetchone()
@@ -174,7 +181,8 @@ def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
 
 def _row_to_incident(row: sqlite3.Row) -> dict:
     incident = dict(row)
-    incident["diagnosis"] = json.loads(incident["diagnosis"]) if incident["diagnosis"] else None
+    for field in ("diagnosis", "repair"):
+        incident[field] = json.loads(incident[field]) if incident[field] else None
     return incident
 
 
@@ -187,6 +195,17 @@ def create_incident(run: dict, status: str, diagnosis: dict) -> dict:
             (run["id"], run["workflow_id"], status, json.dumps(diagnosis), now, now),
         )
     return get_incident(cur.lastrowid)
+
+
+def update_incident(incident_id: int, **fields) -> dict:
+    """Update status / repair / resolution_run_id on an incident."""
+    if "repair" in fields:
+        fields["repair"] = json.dumps(fields["repair"])
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    with _connect() as conn:
+        conn.execute(f"UPDATE incidents SET {assignments}, updated_at = ? WHERE id = ?",
+                     (*fields.values(), _now(), incident_id))
+    return get_incident(incident_id)
 
 
 def get_incident(incident_id: int) -> dict | None:
