@@ -4,7 +4,8 @@ Stores:
   workflows          the current version of each workflow recipe
   workflow_versions  every past version, so we can show "v1 -> v2 after the fix"
   runs               every workflow run with its full step-by-step record
-  incidents          a failed run plus FlowGuard's diagnosis, repair attempts and outcome
+  incidents          a failure (one or more runs with the same error) plus FlowGuard's
+                     diagnosis, repair attempts, and the recovery of the affected runs
 """
 
 import json
@@ -42,7 +43,9 @@ CREATE TABLE IF NOT EXISTS runs (
     trigger          TEXT NOT NULL,
     steps            TEXT NOT NULL,
     started_at       TEXT NOT NULL,
-    finished_at      TEXT
+    finished_at      TEXT,
+    incident_id      INTEGER,
+    replay_of        INTEGER
 );
 CREATE TABLE IF NOT EXISTS incidents (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +55,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     diagnosis   TEXT,
     repair      TEXT,
     resolution_run_id INTEGER,
+    recovery    TEXT,
+    error       TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -72,16 +77,22 @@ def init_db() -> None:
     """Create tables and load the starter workflows from engine/workflows/ (first time only)."""
     with _connect() as conn:
         conn.executescript(SCHEMA)
-        # Databases created before repairs existed are missing these columns.
-        columns = {r["name"] for r in conn.execute("PRAGMA table_info(incidents)")}
-        for column, kind in (("repair", "TEXT"), ("resolution_run_id", "INTEGER")):
-            if column not in columns:
-                conn.execute(f"ALTER TABLE incidents ADD COLUMN {column} {kind}")
+        # Databases created by earlier versions of FlowGuard are missing these columns.
+        _add_missing_columns(conn, "incidents", {"repair": "TEXT", "resolution_run_id": "INTEGER",
+                                                 "recovery": "TEXT", "error": "TEXT"})
+        _add_missing_columns(conn, "runs", {"incident_id": "INTEGER", "replay_of": "INTEGER"})
         for path in sorted(WORKFLOWS_DIR.glob("*.json")):
             definition = json.loads(path.read_text())
             exists = conn.execute("SELECT 1 FROM workflows WHERE id = ?", (definition["id"],)).fetchone()
             if not exists:
                 _insert_version(conn, definition, note="Initial version")
+
+
+def _add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    for column, kind in columns.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
 
 def reset_all() -> None:
@@ -152,14 +163,21 @@ def list_versions(workflow_id: str) -> list[dict]:
 # ---------- Runs ----------
 
 def save_run(run: dict) -> dict:
+    """Save a run. Replays of a failed run set `replay_of` to the original run's id."""
     with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO runs (workflow_id, workflow_version, status, failed_step, error, trigger, steps, "
-            "started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "started_at, finished_at, incident_id, replay_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (run["workflow_id"], run["workflow_version"], run["status"], run["failed_step"], run["error"],
-             json.dumps(run["trigger"]), json.dumps(run["steps"]), run["started_at"], run.get("finished_at")),
+             json.dumps(run["trigger"]), json.dumps(run["steps"]), run["started_at"], run.get("finished_at"),
+             run.get("incident_id"), run.get("replay_of")),
         )
-    return {**run, "id": cur.lastrowid}
+    return get_run(cur.lastrowid)
+
+
+# A failed run counts as recovered once a replay of it succeeded.
+RUN_COLUMNS = """*, (SELECT r2.id FROM runs r2 WHERE r2.replay_of = runs.id AND r2.status = 'success'
+                    ORDER BY r2.id LIMIT 1) AS recovered_by"""
 
 
 def _row_to_run(row: sqlite3.Row) -> dict:
@@ -171,12 +189,12 @@ def _row_to_run(row: sqlite3.Row) -> dict:
 
 def get_run(run_id: int) -> dict | None:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        row = conn.execute(f"SELECT {RUN_COLUMNS} FROM runs WHERE id = ?", (run_id,)).fetchone()
     return _row_to_run(row) if row else None
 
 
 def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
-    query, params = "SELECT * FROM runs", []
+    query, params = f"SELECT {RUN_COLUMNS} FROM runs", []
     if workflow_id:
         query += " WHERE workflow_id = ?"
         params.append(workflow_id)
@@ -187,30 +205,60 @@ def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
     return [_row_to_run(r) for r in rows]
 
 
+def unassigned_failures(workflow_id: str, failed_step: str, error: str) -> list[dict]:
+    """Original (non-replay) failed runs with this exact error that no incident has claimed yet."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {RUN_COLUMNS} FROM runs WHERE workflow_id = ? AND status = 'failed' AND failed_step = ? "
+            "AND error = ? AND incident_id IS NULL AND replay_of IS NULL ORDER BY id",
+            (workflow_id, failed_step, error),
+        ).fetchall()
+    return [_row_to_run(r) for r in rows]
+
+
+def assign_runs(run_ids: list[int], incident_id: int) -> None:
+    with _connect() as conn:
+        conn.executemany("UPDATE runs SET incident_id = ? WHERE id = ?", [(incident_id, r) for r in run_ids])
+
+
+def affected_runs(incident_id: int) -> list[dict]:
+    """The original failed runs grouped under an incident (not the replays)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {RUN_COLUMNS} FROM runs WHERE incident_id = ? AND replay_of IS NULL ORDER BY id",
+            (incident_id,),
+        ).fetchall()
+    return [_row_to_run(r) for r in rows]
+
+
 # ---------- Incidents ----------
+
+# Incidents in these states still "own" their error: new identical failures are grouped into them.
+OPEN_STATUSES = ("diagnosing", "diagnosed", "repairing", "awaiting_approval", "repair_failed", "needs_human")
 
 def _row_to_incident(row: sqlite3.Row) -> dict:
     incident = dict(row)
-    for field in ("diagnosis", "repair"):
+    for field in ("diagnosis", "repair", "recovery"):
         incident[field] = json.loads(incident[field]) if incident[field] else None
     return incident
 
 
-def create_incident(run: dict, status: str, diagnosis: dict) -> dict:
+def create_incident(run: dict, status: str, diagnosis: dict | None = None) -> dict:
     now = _now()
     with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO incidents (run_id, workflow_id, status, diagnosis, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (run["id"], run["workflow_id"], status, json.dumps(diagnosis), now, now),
+            (run["id"], run["workflow_id"], status, json.dumps(diagnosis) if diagnosis else None, now, now),
         )
     return get_incident(cur.lastrowid)
 
 
 def update_incident(incident_id: int, **fields) -> dict:
-    """Update status / repair / resolution_run_id on an incident."""
-    if "repair" in fields:
-        fields["repair"] = json.dumps(fields["repair"])
+    """Update any incident columns, e.g. status, diagnosis, repair, recovery, error."""
+    for field in ("diagnosis", "repair", "recovery"):
+        if field in fields:
+            fields[field] = json.dumps(fields[field])
     assignments = ", ".join(f"{name} = ?" for name in fields)
     with _connect() as conn:
         conn.execute(f"UPDATE incidents SET {assignments}, updated_at = ? WHERE id = ?",
@@ -227,6 +275,19 @@ def get_incident(incident_id: int) -> dict | None:
 def get_incident_for_run(run_id: int) -> dict | None:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM incidents WHERE run_id = ?", (run_id,)).fetchone()
+    return _row_to_incident(row) if row else None
+
+
+def find_open_incident(workflow_id: str, failed_step: str, error: str) -> dict | None:
+    """An unresolved incident whose original run failed the same way (used to group failures)."""
+    placeholders = ", ".join("?" for _ in OPEN_STATUSES)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT incidents.* FROM incidents JOIN runs ON runs.id = incidents.run_id "
+            f"WHERE incidents.workflow_id = ? AND runs.failed_step = ? AND runs.error = ? "
+            f"AND incidents.status IN ({placeholders}) ORDER BY incidents.id DESC LIMIT 1",
+            (workflow_id, failed_step, error, *OPEN_STATUSES),
+        ).fetchone()
     return _row_to_incident(row) if row else None
 
 

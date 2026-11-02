@@ -34,8 +34,11 @@ flowchart LR
 1. **Diagnose.** Muse Spark reads the workflow definition and the full run record (what each step sent and received). It returns a structured diagnosis: plain-English summary, root cause, category, evidence and confidence, plus whether a workflow edit can fix it. It is never told what broke.
 2. **Repair.** Muse Spark proposes a patch using only **three safe operations**: `rename_field`, `set_default`, `add_retry`. It cannot delete steps, call new URLs or run code.
 3. **Validate.** The patch is applied to a copy of the workflow, and the exact failed trigger is replayed in **sandbox mode**: services validate requests as normal but nothing is written. If the replay fails, the new error goes back to the model for another try (up to 3 attempts).
-4. **Approve.** Nothing touches the live workflow until a human clicks **Approve**. The fix is saved as a new, audited version, and the failed run is replayed for real, so the missed customer is recovered.
-5. **Escalate.** Problems a workflow edit can't fix, like a revoked token, go straight to a human with the diagnosis attached.
+4. **Approve.** Nothing touches the live workflow until a human clicks **Approve**. The fix is saved as a new, audited version.
+5. **Recover every missed customer.** Runs that fail with the same error while an incident is open are **grouped into that one incident**, so they get one diagnosis and one fix. On approval, **every affected run is replayed for real**: *"Recovered 3 of 3 affected customers."* The CRM matches contacts by email, so replays never create duplicates.
+6. **Escalate.** Problems a workflow edit can't fix, like a revoked token, go straight to a human with the diagnosis attached. Once the human fixes the cause, one click replays all affected runs.
+
+With **Auto-heal** on, none of this needs a button press: a failed run starts the diagnosis and repair in the background, and the incident page shows each stage live as it happens. Fixes still wait for human approval.
 
 ### Example: two failures at once (real Muse Spark output)
 
@@ -96,13 +99,13 @@ npm install
 npm run dev                                    # http://localhost:3000
 ```
 
-**Demo flow:** click **Run workflow** (green) → tick *CRM API renamed a field* and *Stripe sends empty names* in the Chaos panel → **Run workflow** (red) → **🛡️ Heal with FlowGuard** → read the timeline → **Approve** → back on the dashboard: workflow v2, customer recovered. **↺ Reset demo** starts over.
+**Demo flow:** click **Run workflow** (green) → turn on **🛡️ Auto-heal** → tick *CRM API renamed a field* in the Chaos panel → **Run all 3 payments** (3 red runs, grouped into one incident that starts healing on its own) → open the incident and watch the stages fill in live → **Approve** → back on the dashboard: workflow v2, *3 customers recovered*. **↺ Reset demo** starts over. With Auto-heal off, use the **Heal with FlowGuard** button on a failed run instead. Tick *Stripe sends empty names* as well to see the two-attempt repair.
 
 ### Tests and evaluation
 
 ```bash
 cd backend
-.venv/bin/pytest -v          # 35 tests; the AI is faked, so they're free and deterministic
+.venv/bin/pytest -v          # 46 tests; the AI is faked, so they're free and deterministic
 .venv/bin/python eval.py     # real Muse Spark evaluation (15 cases), writes eval_results.json
 ```
 
@@ -130,9 +133,13 @@ frontend/             Next.js 16 + Tailwind dashboard
 
 - The services are realistic **mocks**, so failures are reproducible for the demo. Next: connectors for n8n / Zapier / Make and real APIs.
 - Three patch operations cover common schema, data and throttling failures. Next: value transforms, endpoint-version upgrades and multi-step edits, each with its own validator.
-- Next: auto-healing on failure (no button press), Slack approval requests, and fleet-level learning from past incidents.
+- Next: approval requests in Slack, and fleet-level learning (reusing approved fixes when the same failure appears in another workflow).
 
 ## Screenshots
+
+| 3 failures grouped, fixed and all 3 customers recovered | Dashboard after recovery |
+|---|---|
+| ![Recovery](docs/screenshots/incident-recovery.png) | ![Dashboard](docs/screenshots/dashboard-recovered.png) |
 
 | Failed run on the dashboard | Escalated to a human |
 |---|---|

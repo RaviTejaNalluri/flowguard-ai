@@ -124,7 +124,9 @@ def heal_schema_drift(client, monkeypatch):
     scripted_ai(monkeypatch, [RENAME_EMAIL])
     client.post("/chaos/schema_drift", json={"enabled": True})
     run = client.post("/workflows/customer_onboarding/run", json={}).json()
-    return client.post(f"/runs/{run['id']}/heal").json()
+    started = client.post(f"/runs/{run['id']}/heal").json()
+    assert started["status"] == "diagnosing"  # heal returns at once and keeps working in the background
+    return client.get(f"/incidents/{started['id']}").json()
 
 
 def test_heal_stops_at_awaiting_approval(client, monkeypatch):

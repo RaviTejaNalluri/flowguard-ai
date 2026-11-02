@@ -11,6 +11,7 @@ The loop, at most MAX_ATTEMPTS times:
 
 import asyncio
 import json
+from collections.abc import Callable
 
 from agent.patches import OPERATIONS_SCHEMA, PatchError, apply_patch
 from engine.runner import mock_client, run_workflow
@@ -48,7 +49,9 @@ def _sandbox_replay(workflow: dict, trigger: dict) -> dict:
     return asyncio.run(go())
 
 
-def repair(workflow: dict, run: dict, diagnosis: dict) -> dict:
+def repair(workflow: dict, run: dict, diagnosis: dict,
+           on_progress: Callable[[list[dict]], None] | None = None) -> dict:
+    """Run the repair loop. `on_progress(attempts)` is called after each attempt (for live UI updates)."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(
@@ -74,6 +77,8 @@ def repair(workflow: dict, run: dict, diagnosis: dict) -> dict:
                         "patched_workflow": patched, "changes": attempt["changes"]}
             attempt["error"] = f"Sandbox replay failed at {result['failed_step']}: {result['error']}"
 
+        if on_progress:
+            on_progress(attempts)
         messages += [
             {"role": "assistant", "content": json.dumps(patch)},
             {"role": "user", "content": f"That patch did not work. {attempt['error']}\n"

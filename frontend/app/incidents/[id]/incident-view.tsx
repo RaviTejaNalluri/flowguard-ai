@@ -1,23 +1,25 @@
 "use client";
 
 // The full recovery story as a timeline (rendered by app/incidents/[id]/page.tsx).
-// 1 Failure -> 2 Diagnosis -> 3 Repair attempts (sandbox tested) -> 4 Proposed change -> 5 Human decision
+// 1 Failure -> 2 Diagnosis -> 3 Repair attempts (sandbox tested) -> 4 Proposed change -> 5 Human decision + recovery
+// While FlowGuard is still working (diagnosing / repairing) the page polls every second to show progress live.
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Button, ErrorBanner, Spinner, StatusBadge, StepTrail, timeAgo } from "@/components/ui";
-import { api, type Incident, type Workflow } from "@/lib/api";
+import { api, IN_PROGRESS, type Incident, type Workflow } from "@/lib/api";
+
+type Action = "repair" | "approve" | "reject" | "replay";
 
 export default function IncidentView() {
   const { id } = useParams<{ id: string }>();
   const incidentId = Number(id);
   const [incident, setIncident] = useState<Incident | null>(null);
   const [original, setOriginal] = useState<Workflow | null>(null);
-  const [busy, setBusy] = useState<"repair" | "approve" | "reject" | null>(null);
+  const [busy, setBusy] = useState<Action | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const repairStarted = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -32,11 +34,11 @@ export default function IncidentView() {
     }
   }, [incidentId]);
 
-  const act = useCallback(async (kind: "repair" | "approve" | "reject") => {
+  const act = useCallback(async (kind: Action) => {
     setBusy(kind);
     setError(null);
     try {
-      const fn = { repair: api.repair, approve: api.approve, reject: api.reject }[kind];
+      const fn = { repair: api.repair, approve: api.approve, reject: api.reject, replay: api.replay }[kind];
       await fn(incidentId);
       await load();
     } catch (e) {
@@ -51,13 +53,13 @@ export default function IncidentView() {
     return () => clearTimeout(first);
   }, [load]);
 
-  // A freshly diagnosed incident goes straight into repair, so the demo flows without extra clicks.
+  // Poll while FlowGuard is working in the background.
+  const status = incident?.status;
   useEffect(() => {
-    if (incident?.status === "diagnosed" && !repairStarted.current) {
-      repairStarted.current = true;
-      act("repair");
-    }
-  }, [incident?.status, act]);
+    if (!status || !IN_PROGRESS.includes(status)) return;
+    const timer = setInterval(load, 1000);
+    return () => clearInterval(timer);
+  }, [status, load]);
 
   if (!incident) {
     return (
@@ -73,6 +75,9 @@ export default function IncidentView() {
   const stepIds = original?.steps.map((s) => s.id) ?? run.steps.map((s) => s.id);
   const failedStep = run.steps.find((s) => s.id === run.failed_step);
   const patched = incident.repair?.patched_workflow ?? null;
+  const affected = incident.affected_runs ?? [];
+  const attemptsSoFar = incident.repair?.attempts.length ?? 0;
+  const escalated = d?.fixable_by_workflow_change === false; // a human must act; FlowGuard never repairs these
 
   return (
     <div className="space-y-6">
@@ -102,6 +107,12 @@ export default function IncidentView() {
               <JsonBox label={`Response (HTTP ${failedStep.response.status})`} value={failedStep.response.body} />
             </div>
           )}
+          {affected.length > 1 && (
+            <p className="mt-3 text-sm text-slate-300">
+              <span className="font-semibold text-rose-300">{affected.length} runs</span> failed with this exact error and
+              are grouped into this incident: {affected.map((r) => `#${r.id} (${r.trigger.payment_id})`).join(", ")}.
+            </p>
+          )}
         </Stage>
 
         {/* 2. Diagnosis */}
@@ -121,24 +132,42 @@ export default function IncidentView() {
                 </ul>
               </div>
             </div>
+          ) : incident.status === "diagnosing" ? (
+            <p className="flex items-center gap-2 text-sm text-indigo-300">
+              <Spinner /> Muse Spark is reading the workflow and the run record…
+            </p>
+          ) : incident.status === "error" ? (
+            <p className="text-sm text-rose-300">FlowGuard could not reach the model: {incident.error}</p>
           ) : (
             <p className="text-sm text-slate-500">No diagnosis.</p>
           )}
         </Stage>
 
         {/* 3. Repair attempts */}
-        {incident.status === "needs_human" ? (
+        {escalated ? (
           <Stage n={3} title="Escalated to a human" tone="warn">
             <p className="text-sm text-amber-200">
               FlowGuard determined this cannot be fixed safely by editing the workflow, so it did <b>not</b> attempt a
-              repair. A person needs to act (for example, reconnect the Slack integration), then re-run the payment.
+              repair. A person needs to act (for example, reconnect the Slack integration), then replay the affected runs.
             </p>
+            {incident.status === "needs_human" && (
+              <div className="mt-3">
+                <Button variant="secondary" disabled={busy !== null} onClick={() => act("replay")}>
+                  {busy === "replay" ? <Spinner /> : "↻"} I fixed it, replay {affected.length} affected run{affected.length === 1 ? "" : "s"}
+                </Button>
+              </div>
+            )}
+            {incident.status === "needs_human" && incident.recovery && incident.recovery.recovered < incident.recovery.affected && (
+              <p className="mt-2 text-xs text-rose-300">
+                Still failing ({incident.recovery.recovered}/{incident.recovery.affected} recovered). Is the problem really fixed?
+              </p>
+            )}
           </Stage>
-        ) : (
+        ) : d && (
           <Stage n={3} title="Repair, tested in a sandbox" tone="ai">
-            {busy === "repair" && (
+            {(incident.status === "repairing" || busy === "repair") && (
               <p className="mb-3 flex items-center gap-2 text-sm text-indigo-300">
-                <Spinner /> Muse Spark is proposing a fix and replaying the failed run in a sandbox…
+                <Spinner /> Muse Spark is proposing fix #{attemptsSoFar + 1} and replaying the failed run in a sandbox…
               </p>
             )}
             {incident.repair?.attempts.map((a) => (
@@ -177,12 +206,13 @@ export default function IncidentView() {
         )}
 
         {/* 5. Human decision */}
-        {(incident.status === "awaiting_approval" || incident.resolution_run || incident.status === "rejected") && (
-          <Stage n={5} title="Human approval" tone={incident.status === "resolved" ? "good" : "ai"}>
+        {!escalated && (incident.status === "awaiting_approval" || incident.status === "rejected" || incident.recovery) && (
+          <Stage n={5} title="Human approval & recovery" tone={incident.status === "resolved" ? "good" : "ai"}>
             {incident.status === "awaiting_approval" && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-300">
-                  The fix passed the sandbox test. Nothing changes in production until you approve it.
+                  The fix passed the sandbox test. Nothing changes in production until you approve it. Approving also
+                  replays {affected.length === 1 ? "the failed run" : `all ${affected.length} affected runs`} so no customer is lost.
                 </p>
                 <div className="flex gap-3">
                   <Button variant="success" disabled={busy !== null} onClick={() => act("approve")}>
@@ -193,19 +223,38 @@ export default function IncidentView() {
               </div>
             )}
             {incident.status === "rejected" && <p className="text-sm text-slate-400">Rejected. The workflow was left unchanged.</p>}
-            {incident.resolution_run && (
-              <div className="space-y-2">
-                <p className={`text-sm ${incident.resolution_run.status === "success" ? "text-emerald-300" : "text-rose-300"}`}>
-                  {incident.resolution_run.status === "success"
-                    ? `✅ Fix applied as workflow v${incident.resolution_run.workflow_version}. Payment ${run.trigger.payment_id} was replayed for real and the customer is recovered.`
-                    : `Fix applied, but the replay still failed: ${incident.resolution_run.error}`}
-                </p>
-                <StepTrail stepIds={stepIds} records={incident.resolution_run.steps} />
-              </div>
-            )}
+            {incident.recovery && <Recovery incident={incident} />}
+          </Stage>
+        )}
+
+        {escalated && incident.status === "resolved" && incident.recovery && (
+          <Stage n={4} title="Recovered after human fix" tone="good">
+            <Recovery incident={incident} />
           </Stage>
         )}
       </ol>
+    </div>
+  );
+}
+
+function Recovery({ incident }: { incident: Incident }) {
+  const { affected, recovered, replays } = incident.recovery!;
+  const allOk = recovered === affected;
+  const version = incident.resolution_run?.workflow_version;
+  return (
+    <div className="space-y-3">
+      <p className={`text-sm ${allOk ? "text-emerald-300" : "text-rose-300"}`}>
+        {allOk ? "✅ " : ""}
+        {version && incident.repair?.patched_workflow ? `Fix applied as workflow v${version}. ` : ""}
+        Recovered <b>{recovered} of {affected}</b> affected customer{affected === 1 ? "" : "s"} by replaying their failed runs for real.
+      </p>
+      <ul className="space-y-1">
+        {replays.map((r) => (
+          <li key={r.replay_run_id} className="flex items-center gap-2 font-mono text-xs text-slate-300">
+            <StatusBadge status={r.status} /> {r.payment_id}: run #{r.run_id} → replay #{r.replay_run_id}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -43,6 +43,9 @@ export type Run = {
   trigger: { payment_id: string };
   steps: StepRecord[];
   started_at: string;
+  incident_id: number | null; // the incident this failed run belongs to
+  replay_of: number | null; // set on replays: the failed run being retried
+  recovered_by: number | null; // set on failed runs: the replay that succeeded
 };
 
 export type Diagnosis = {
@@ -63,6 +66,9 @@ export type RepairAttempt = {
 };
 
 export type IncidentStatus =
+  | "diagnosing"
+  | "repairing"
+  | "error"
   | "diagnosed"
   | "needs_human"
   | "awaiting_approval"
@@ -79,10 +85,20 @@ export type Incident = {
   diagnosis: Diagnosis | null;
   repair: { status: string; attempts: RepairAttempt[]; patched_workflow: Workflow | null; changes: string[] } | null;
   resolution_run_id: number | null;
+  recovery: {
+    affected: number;
+    recovered: number;
+    replays: { run_id: number; replay_run_id: number; payment_id: string; status: string }[];
+  } | null;
+  error: string | null;
   created_at: string;
   run?: Run;
   resolution_run?: Run | null;
+  affected_runs?: Run[];
 };
+
+/** Statuses where FlowGuard is still working, so the UI should keep polling. */
+export const IN_PROGRESS: IncidentStatus[] = ["diagnosing", "repairing"];
 
 export type ChaosSwitches = Record<string, { enabled: boolean; description: string }>;
 
@@ -114,13 +130,17 @@ export const api = {
     request<Run>(`/workflows/${id}/run`, "POST", { payment_id: paymentId }),
 
   runs: (limit = 20) => request<Run[]>(`/runs?limit=${limit}`),
-  diagnose: (runId: number) => request<Incident>(`/runs/${runId}/diagnose`, "POST"),
+  heal: (runId: number) => request<Incident>(`/runs/${runId}/heal`, "POST"),
 
   incidents: () => request<Incident[]>("/incidents"),
   incident: (id: number) => request<Incident>(`/incidents/${id}`),
   repair: (id: number) => request<Incident>(`/incidents/${id}/repair`, "POST"),
   approve: (id: number) => request<Incident>(`/incidents/${id}/approve`, "POST"),
   reject: (id: number) => request<Incident>(`/incidents/${id}/reject`, "POST"),
+  replay: (id: number) => request<Incident>(`/incidents/${id}/replay`, "POST"),
+
+  settings: () => request<{ auto_heal: boolean }>("/settings"),
+  setAutoHeal: (on: boolean) => request<{ auto_heal: boolean }>("/settings", "POST", { auto_heal: on }),
 
   chaos: () => request<ChaosSwitches>("/chaos"),
   setChaos: (name: string, enabled: boolean) => request<ChaosSwitches>(`/chaos/${name}`, "POST", { enabled }),

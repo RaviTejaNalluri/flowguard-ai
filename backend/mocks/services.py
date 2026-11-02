@@ -59,6 +59,9 @@ async def create_contact(request: Request):
 
     if _is_sandbox(request):
         return {"id": "ct_sandbox", "name": body["name"], "email": body[email_field]}
+    # Like most real CRMs, contacts are unique by email, so replaying a run never creates duplicates.
+    if existing := next((c for c in contacts if c["email"] == body[email_field]), None):
+        return existing
     contact = {"id": f"ct_{len(contacts) + 1:03d}", "name": body["name"], "email": body[email_field]}
     contacts.append(contact)
     return contact

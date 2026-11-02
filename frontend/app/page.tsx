@@ -1,6 +1,6 @@
 "use client";
 
-// Main dashboard: the workflow, chaos switches, run history, and a "Heal" button on failed runs.
+// Main dashboard: the workflow, chaos switches, run history, auto-heal, and a "Heal" button on failed runs.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -30,14 +30,16 @@ export default function Dashboard() {
   const [chaos, setChaos] = useState<ChaosSwitches>({});
   const [services, setServices] = useState<ServicesData>({ crm_contacts: [], slack_messages: [] });
   const [paymentId, setPaymentId] = useState(PAYMENTS[0].id);
+  const [autoHeal, setAutoHeal] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [workflows, runs, incidents, chaos, services] = await Promise.all([
-        api.workflows(), api.runs(), api.incidents(), api.chaos(), api.servicesData(),
+      const [workflows, runs, incidents, chaos, services, settings] = await Promise.all([
+        api.workflows(), api.runs(), api.incidents(), api.chaos(), api.servicesData(), api.settings(),
       ]);
+      setAutoHeal(settings.auto_heal);
       setWorkflow(workflows.find((w) => w.id === WORKFLOW_ID) ?? null);
       setRuns(runs);
       setIncidents(incidents);
@@ -49,10 +51,10 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Load now, then poll every 5 seconds.
+  // Load now, then poll every 2 seconds so background healing shows up quickly.
   useEffect(() => {
     const first = setTimeout(refresh, 0);
-    const timer = setInterval(refresh, 5000);
+    const timer = setInterval(refresh, 2000);
     return () => {
       clearTimeout(first);
       clearInterval(timer);
@@ -74,7 +76,7 @@ export default function Dashboard() {
   async function heal(run: Run) {
     setBusy(`heal-${run.id}`);
     try {
-      const incident = await api.diagnose(run.id);
+      const incident = await api.heal(run.id);
       router.push(`/incidents/${incident.id}`);
     } catch (e) {
       setError((e as Error).message);
@@ -82,9 +84,23 @@ export default function Dashboard() {
     }
   }
 
-  const incidentFor = (runId: number) => incidents.find((i) => i.run_id === runId);
+  const incidentById = (id: number | null) => incidents.find((i) => i.id === id);
   const stepIds = workflow?.steps.map((s) => s.id) ?? [];
-  const failed = runs.filter((r) => r.status === "failed").length;
+  const originals = runs.filter((r) => r.status === "failed" && !r.replay_of);
+  const openFailures = originals.filter((r) => !r.recovered_by).length;
+  const recovered = originals.filter((r) => r.recovered_by).length;
+
+  async function runAllPayments() {
+    setBusy("run-all");
+    try {
+      for (const p of PAYMENTS) await api.runWorkflow(WORKFLOW_ID, p.id);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -93,8 +109,8 @@ export default function Dashboard() {
       {/* Top stats */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <Stat label="Runs" value={runs.length} />
-        <Stat label="Failed runs" value={failed} tone={failed ? "bad" : undefined} />
-        <Stat label="Incidents resolved" value={incidents.filter((i) => i.status === "resolved").length} tone="good" />
+        <Stat label="Open failures" value={openFailures} tone={openFailures ? "bad" : undefined} />
+        <Stat label="Customers recovered" value={recovered} tone="good" />
         <Stat label="Awaiting your approval" value={incidents.filter((i) => i.status === "awaiting_approval").length} />
       </div>
 
@@ -194,7 +210,9 @@ export default function Dashboard() {
               <Button disabled={busy !== null} onClick={() => act("run", () => api.runWorkflow(WORKFLOW_ID, paymentId))}>
                 {busy === "run" ? <Spinner /> : "▶"} Run workflow
               </Button>
-              <span className="text-xs text-slate-500">Simulates a new Stripe payment arriving.</span>
+              <Button variant="secondary" disabled={busy !== null} onClick={runAllPayments}>
+                {busy === "run-all" ? <Spinner /> : "▶▶"} Run all 3 payments
+              </Button>
               <span className="ml-auto">
                 <Button
                   variant="secondary"
@@ -209,6 +227,21 @@ export default function Dashboard() {
                 </Button>
               </span>
             </div>
+            <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-lg border border-slate-800 px-3 py-2">
+              <input
+                type="checkbox"
+                checked={autoHeal}
+                disabled={busy !== null}
+                onChange={(e) => act("auto-heal", () => api.setAutoHeal(e.target.checked))}
+                className="accent-indigo-500"
+              />
+              <span>
+                <span className="block text-sm font-medium text-slate-200">🛡️ Auto-heal</span>
+                <span className="block text-xs text-slate-500">
+                  When a run fails, FlowGuard starts diagnosing and repairing it on its own. Fixes still wait for your approval.
+                </span>
+              </span>
+            </label>
           </Card>
 
           <Card title="Run history">
@@ -217,7 +250,7 @@ export default function Dashboard() {
             ) : (
               <ul className="divide-y divide-slate-800">
                 {runs.map((run) => {
-                  const incident = incidentFor(run.id);
+                  const incident = run.replay_of ? undefined : incidentById(run.incident_id);
                   return (
                     <li key={run.id} className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
                       <div className="min-w-0 space-y-2">
@@ -227,6 +260,8 @@ export default function Dashboard() {
                           <span className="text-slate-500">
                             {run.trigger.payment_id} · v{run.workflow_version} · {timeAgo(run.started_at)}
                           </span>
+                          {run.replay_of && <RunTag tone="info">↻ replay of #{run.replay_of}</RunTag>}
+                          {run.recovered_by && <RunTag tone="good">✓ recovered by #{run.recovered_by}</RunTag>}
                         </div>
                         <StepTrail stepIds={stepIds} records={run.steps} />
                         {run.error && <p className="font-mono text-xs text-rose-300">{run.error}</p>}
@@ -262,6 +297,13 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "go
       <div className="text-xs text-slate-400">{label}</div>
     </div>
   );
+}
+
+function RunTag({ tone, children }: { tone: "info" | "good"; children: React.ReactNode }) {
+  const style = tone === "good"
+    ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
+    : "bg-slate-800 text-slate-300 ring-slate-700";
+  return <span className={`rounded px-1.5 py-0.5 text-xs ring-1 ring-inset ${style}`}>{children}</span>;
 }
 
 function Tag({ children }: { children: React.ReactNode }) {
