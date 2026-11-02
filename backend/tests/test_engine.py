@@ -31,7 +31,7 @@ def test_healthy_run_succeeds():
     assert result["status"] == "success"
     assert [s["status"] for s in result["steps"]] == ["success"] * 3
     assert contacts[0]["email"] == "ada@example.com"
-    assert messages[0]["text"] == "New customer Ada Lovelace paid 4900 usd"
+    assert messages[0]["text"] == "New customer Ada Lovelace paid 49.00 USD"
 
 
 # ---------- Each chaos switch breaks the expected step ----------
@@ -87,6 +87,7 @@ def test_default_value_fixes_missing_data():
 
     assert run(wf)["status"] == "success"
     assert contacts[0]["name"] == "Unknown customer"
+    assert messages[0]["text"] == "New customer Unknown customer paid 49.00 USD"
 
 
 def test_retry_fixes_rate_limit():

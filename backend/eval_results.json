@@ -1,0 +1,288 @@
+{
+  "summary": {
+    "model": "muse-spark-1.3",
+    "cases": 15,
+    "passed": 15,
+    "pass_rate": 1.0,
+    "healed": "12/12",
+    "escalated_correctly": "3/3",
+    "diagnosis_category_accuracy": 1.0,
+    "first_attempt_fix_rate": 0.75,
+    "avg_repair_attempts": 1.25,
+    "avg_seconds_per_incident": 7.7,
+    "avg_cost_usd_per_incident": 0.00997,
+    "total_cost_usd": 0.1495
+  },
+  "results": [
+    {
+      "switches": [
+        "schema_drift"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "field_mapping",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: rename body field 'email' -> 'email_address'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 6.1,
+      "llm_calls": 2,
+      "cost_usd": 0.00924
+    },
+    {
+      "switches": [
+        "schema_drift"
+      ],
+      "payment_id": "pay_002",
+      "expected": "healed",
+      "category": "field_mapping",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: rename body field 'email' -> 'email_address'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 5.6,
+      "llm_calls": 2,
+      "cost_usd": 0.00849
+    },
+    {
+      "switches": [
+        "schema_drift"
+      ],
+      "payment_id": "pay_003",
+      "expected": "healed",
+      "category": "field_mapping",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: rename body field 'email' -> 'email_address'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 4.9,
+      "llm_calls": 2,
+      "cost_usd": 0.00716
+    },
+    {
+      "switches": [
+        "missing_data"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "missing_input_data",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: if 'name' is empty, use 'Unknown customer'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 7.5,
+      "llm_calls": 2,
+      "cost_usd": 0.01
+    },
+    {
+      "switches": [
+        "missing_data"
+      ],
+      "payment_id": "pay_002",
+      "expected": "healed",
+      "category": "missing_input_data",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: if 'name' is empty, use 'Unknown customer'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 7.9,
+      "llm_calls": 2,
+      "cost_usd": 0.01015
+    },
+    {
+      "switches": [
+        "missing_data"
+      ],
+      "payment_id": "pay_003",
+      "expected": "healed",
+      "category": "missing_input_data",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "create_contact: if 'name' is empty, use 'Unknown customer'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 9.4,
+      "llm_calls": 2,
+      "cost_usd": 0.01082
+    },
+    {
+      "switches": [
+        "rate_limit"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "rate_limiting",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "notify_slack: retry up to 3 attempts on HTTP 429/5xx"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 8.8,
+      "llm_calls": 2,
+      "cost_usd": 0.01144
+    },
+    {
+      "switches": [
+        "rate_limit"
+      ],
+      "payment_id": "pay_002",
+      "expected": "healed",
+      "category": "rate_limiting",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "notify_slack: retry up to 3 attempts on HTTP 429/5xx"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 7.7,
+      "llm_calls": 2,
+      "cost_usd": 0.01013
+    },
+    {
+      "switches": [
+        "rate_limit"
+      ],
+      "payment_id": "pay_003",
+      "expected": "healed",
+      "category": "rate_limiting",
+      "category_ok": true,
+      "attempts": 1,
+      "changes": [
+        "notify_slack: retry up to 3 attempts on HTTP 429/5xx"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 6.9,
+      "llm_calls": 2,
+      "cost_usd": 0.01014
+    },
+    {
+      "switches": [
+        "auth_expired"
+      ],
+      "payment_id": "pay_001",
+      "expected": "needs_human",
+      "category": "authentication",
+      "category_ok": true,
+      "attempts": 0,
+      "changes": [],
+      "outcome": "needs_human",
+      "passed": true,
+      "seconds": 2.8,
+      "llm_calls": 1,
+      "cost_usd": 0.00443
+    },
+    {
+      "switches": [
+        "auth_expired"
+      ],
+      "payment_id": "pay_002",
+      "expected": "needs_human",
+      "category": "authentication",
+      "category_ok": true,
+      "attempts": 0,
+      "changes": [],
+      "outcome": "needs_human",
+      "passed": true,
+      "seconds": 3.8,
+      "llm_calls": 1,
+      "cost_usd": 0.00499
+    },
+    {
+      "switches": [
+        "auth_expired"
+      ],
+      "payment_id": "pay_003",
+      "expected": "needs_human",
+      "category": "authentication",
+      "category_ok": true,
+      "attempts": 0,
+      "changes": [],
+      "outcome": "needs_human",
+      "passed": true,
+      "seconds": 3.6,
+      "llm_calls": 1,
+      "cost_usd": 0.00528
+    },
+    {
+      "switches": [
+        "schema_drift",
+        "missing_data"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "missing_input_data",
+      "category_ok": true,
+      "attempts": 2,
+      "changes": [
+        "create_contact: rename body field 'email' -> 'email_address'",
+        "create_contact: if 'name' is empty, use 'Unknown customer'"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 15.2,
+      "llm_calls": 3,
+      "cost_usd": 0.0177
+    },
+    {
+      "switches": [
+        "schema_drift",
+        "rate_limit"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "field_mapping",
+      "category_ok": true,
+      "attempts": 2,
+      "changes": [
+        "create_contact: rename body field 'email' -> 'email_address'",
+        "notify_slack: retry up to 3 attempts on HTTP 429/5xx"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 8.9,
+      "llm_calls": 3,
+      "cost_usd": 0.01308
+    },
+    {
+      "switches": [
+        "missing_data",
+        "rate_limit"
+      ],
+      "payment_id": "pay_001",
+      "expected": "healed",
+      "category": "missing_input_data",
+      "category_ok": true,
+      "attempts": 2,
+      "changes": [
+        "create_contact: if 'name' is empty, use 'Unknown customer'",
+        "notify_slack: retry up to 3 attempts on HTTP 429/5xx"
+      ],
+      "outcome": "healed",
+      "passed": true,
+      "seconds": 15.8,
+      "llm_calls": 3,
+      "cost_usd": 0.01646
+    }
+  ]
+}

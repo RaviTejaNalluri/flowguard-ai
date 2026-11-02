@@ -18,6 +18,15 @@ API_KEY = os.getenv("MODEL_API_KEY", "")
 BASE_URL = os.getenv("MUSE_BASE_URL", "https://api.meta.ai/v1").rstrip("/")
 MODEL = os.getenv("MUSE_MODEL", "muse-spark-1.3")
 
+# Running totals, so we can report how many calls/tokens FlowGuard used (see eval.py).
+# Prices in USD per 1M tokens for muse-spark-1.3 (https://dev.meta.ai/docs/pricing-rate-limits).
+PRICE_PER_M = {"input": 1.25, "output": 4.25}
+usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+
+
+def usage_cost(u: dict = usage) -> float:
+    return (u["input_tokens"] * PRICE_PER_M["input"] + u["output_tokens"] * PRICE_PER_M["output"]) / 1_000_000
+
 
 def _post(body: dict) -> dict:
     if not API_KEY or API_KEY == "your-key-here":
@@ -30,7 +39,11 @@ def _post(body: dict) -> dict:
         timeout=120,
     )
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    usage["calls"] += 1
+    usage["input_tokens"] += data.get("usage", {}).get("prompt_tokens", 0)
+    usage["output_tokens"] += data.get("usage", {}).get("completion_tokens", 0)
+    return data
 
 
 def chat(messages: list[dict]) -> str:

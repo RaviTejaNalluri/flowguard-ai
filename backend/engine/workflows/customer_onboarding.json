@@ -27,7 +27,7 @@
       "path": "/slack/messages",
       "body": {
         "channel": "#sales",
-        "text": "New customer {{steps.fetch_payment.customer.name}} paid {{steps.fetch_payment.amount}} {{steps.fetch_payment.currency}}"
+        "text": "New customer {{steps.create_contact.name}} paid {{steps.fetch_payment.amount | money}} {{steps.fetch_payment.currency | upper}}"
       }
     }
   ]

@@ -3,6 +3,8 @@
 A workflow is a JSON "recipe" (see engine/workflows/). Each step is an HTTP call
 whose path and body can use {{templates}} that pull values from the trigger or
 from earlier steps' responses, e.g. {{steps.fetch_payment.customer.email}}.
+Inside text, a filter can format the value: {{steps.fetch_payment.amount | money}}
+turns 4900 (cents) into "49.00", and {{... | upper}} upper-cases it.
 
 Optional step settings (these are what FlowGuard's repairs will change):
   "defaults": {"name": "Unknown customer"}  -> fill a body field if it comes out empty
@@ -22,7 +24,11 @@ import httpx
 from mocks.services import app as mock_app
 
 WORKFLOWS_DIR = Path(__file__).parent / "workflows"
-TEMPLATE = re.compile(r"\{\{\s*([\w.]+)\s*\}\}")
+TEMPLATE = re.compile(r"\{\{\s*([\w.]+)\s*(?:\|\s*(\w+)\s*)?\}\}")
+FILTERS = {
+    "money": lambda v: f"{int(v) / 100:.2f}",
+    "upper": lambda v: str(v).upper(),
+}
 RETRYABLE = {429, 500, 502, 503, 504}
 
 
@@ -56,9 +62,18 @@ def _render(value, context: dict):
     if not isinstance(value, str):
         return value
     whole = TEMPLATE.fullmatch(value)
-    if whole:
+    if whole and not whole.group(2):
         return _lookup(context, whole.group(1))
-    return TEMPLATE.sub(lambda m: "" if (v := _lookup(context, m.group(1))) is None else str(v), value)
+    return TEMPLATE.sub(lambda m: _fill(context, m.group(1), m.group(2)), value)
+
+
+def _fill(context: dict, path: str, filter_name: str | None) -> str:
+    value = _lookup(context, path)
+    if value is None:
+        return ""
+    if filter_name in FILTERS:
+        return FILTERS[filter_name](value)
+    return str(value)
 
 
 def _now() -> str:

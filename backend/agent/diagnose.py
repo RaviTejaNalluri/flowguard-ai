@@ -39,6 +39,7 @@ A workflow run has failed. Diagnose the root cause using ONLY the evidence provi
 How workflows work:
 - A workflow is a list of HTTP steps. Paths and bodies use {{templates}} that pull values from the
   trigger or from earlier steps' responses, e.g. {{steps.fetch_payment.customer.email}}.
+  Text templates may use a formatting filter, e.g. {{steps.fetch_payment.amount | money}}.
 - A step may have "defaults" (fill empty body fields) and "retry" (retry on HTTP 429/5xx).
 
 Rules:
