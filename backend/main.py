@@ -210,3 +210,12 @@ def services_data():
 def services_reset():
     reset_data()
     return {"crm_contacts": contacts, "slack_messages": messages}
+
+
+@app.post("/demo/reset")
+def demo_reset():
+    """Start the demo over: workflow back to v1, no runs or incidents, switches off, apps empty."""
+    db.reset_all()
+    chaos.reset()
+    reset_data()
+    return {"status": "reset"}

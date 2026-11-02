@@ -84,6 +84,16 @@ def init_db() -> None:
                 _insert_version(conn, definition, note="Initial version")
 
 
+def reset_all() -> None:
+    """Delete everything and reload the starter workflows (used by the demo's Reset button)."""
+    with _connect() as conn:
+        conn.executescript(
+            "DROP TABLE IF EXISTS incidents; DROP TABLE IF EXISTS runs; "
+            "DROP TABLE IF EXISTS workflow_versions; DROP TABLE IF EXISTS workflows;"
+        )
+    init_db()
+
+
 def _insert_version(conn: sqlite3.Connection, definition: dict, note: str) -> None:
     text = json.dumps(definition)
     now = _now()

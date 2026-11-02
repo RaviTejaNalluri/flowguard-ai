@@ -125,3 +125,16 @@ def test_successful_run_cannot_be_diagnosed(client, fake_ai):
     run = client.post("/workflows/customer_onboarding/run", json={}).json()
     assert client.post(f"/runs/{run['id']}/diagnose").status_code == 400
     assert fake_ai == []
+
+
+def test_demo_reset_starts_over(client):
+    workflow = client.get("/workflows/customer_onboarding").json()
+    db.save_workflow(workflow, note="changed")
+    client.post("/chaos/rate_limit", json={"enabled": True})
+    client.post("/workflows/customer_onboarding/run", json={})
+
+    client.post("/demo/reset")
+    assert client.get("/workflows/customer_onboarding").json()["version"] == 1
+    assert client.get("/runs").json() == []
+    assert client.get("/chaos").json()["rate_limit"]["enabled"] is False
+    assert client.get("/services/data").json()["crm_contacts"] == []
