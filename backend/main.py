@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import db
+from agent.diagnose import diagnose
 from engine.runner import mock_client, run_workflow
 from mocks import chaos
 from mocks.services import contacts, messages, reset_data
@@ -87,6 +88,36 @@ def get_run(run_id: int):
     if not run:
         raise HTTPException(404, f"No such run: {run_id}")
     return run
+
+
+@app.post("/runs/{run_id}/diagnose")
+def diagnose_run(run_id: int):
+    """Ask Muse Spark why this run failed. Creates an incident (once per run)."""
+    run = get_run(run_id)
+    if run["status"] != "failed":
+        raise HTTPException(400, "Only failed runs can be diagnosed")
+    if existing := db.get_incident_for_run(run_id):
+        return existing
+
+    workflow = db.get_workflow_version(run["workflow_id"], run["workflow_version"])
+    diagnosis = diagnose(workflow, run)
+    status = "diagnosed" if diagnosis["fixable_by_workflow_change"] else "needs_human"
+    return db.create_incident(run, status, diagnosis)
+
+
+# ---------- Incidents ----------
+
+@app.get("/incidents")
+def list_incidents(limit: int = 50):
+    return db.list_incidents(limit)
+
+
+@app.get("/incidents/{incident_id}")
+def get_incident(incident_id: int):
+    incident = db.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(404, f"No such incident: {incident_id}")
+    return {**incident, "run": db.get_run(incident["run_id"])}
 
 
 # ---------- Chaos switches ----------

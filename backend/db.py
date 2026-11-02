@@ -4,6 +4,7 @@ Stores:
   workflows          the current version of each workflow recipe
   workflow_versions  every past version, so we can show "v1 -> v2 after the fix"
   runs               every workflow run with its full step-by-step record
+  incidents          a failed run plus FlowGuard's diagnosis (and later its repair)
 """
 
 import json
@@ -42,6 +43,15 @@ CREATE TABLE IF NOT EXISTS runs (
     steps            TEXT NOT NULL,
     started_at       TEXT NOT NULL,
     finished_at      TEXT
+);
+CREATE TABLE IF NOT EXISTS incidents (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL UNIQUE,
+    workflow_id TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    diagnosis   TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
 );
 """
 
@@ -103,6 +113,15 @@ def save_workflow(definition: dict, note: str) -> dict:
     return definition
 
 
+def get_workflow_version(workflow_id: str, version: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT definition FROM workflow_versions WHERE workflow_id = ? AND version = ?",
+            (workflow_id, version),
+        ).fetchone()
+    return json.loads(row["definition"]) if row else None
+
+
 def list_versions(workflow_id: str) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
@@ -149,3 +168,40 @@ def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [_row_to_run(r) for r in rows]
+
+
+# ---------- Incidents ----------
+
+def _row_to_incident(row: sqlite3.Row) -> dict:
+    incident = dict(row)
+    incident["diagnosis"] = json.loads(incident["diagnosis"]) if incident["diagnosis"] else None
+    return incident
+
+
+def create_incident(run: dict, status: str, diagnosis: dict) -> dict:
+    now = _now()
+    with _connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO incidents (run_id, workflow_id, status, diagnosis, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run["id"], run["workflow_id"], status, json.dumps(diagnosis), now, now),
+        )
+    return get_incident(cur.lastrowid)
+
+
+def get_incident(incident_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+    return _row_to_incident(row) if row else None
+
+
+def get_incident_for_run(run_id: int) -> dict | None:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM incidents WHERE run_id = ?", (run_id,)).fetchone()
+    return _row_to_incident(row) if row else None
+
+
+def list_incidents(limit: int = 50) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM incidents ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [_row_to_incident(r) for r in rows]
